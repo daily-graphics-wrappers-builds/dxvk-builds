@@ -3,7 +3,7 @@ name: "Auto build DXVK on change"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'       # every hour
+    - cron: '0 * * * *'       # every hour – change to '*/5 * * * *' for 5 minutes
 
 permissions:
   contents: write
@@ -62,30 +62,36 @@ jobs:
           mkdir -p release_assets
           # Copy the original .tar.gz
           cp dxvk_source/build/dxvk-*.tar.gz release_assets/
-
-          # Extract the tarball into a temporary directory (solves permission issues)
+          # Extract tarball to a temporary directory and repack as .zip
           mkdir -p temp_extract
           tar -xzf dxvk_source/build/dxvk-*.tar.gz -C temp_extract
-
-          # Find the extracted folder (should be named dxvk-<short_sha>)
           EXTRACTED_DIR=$(ls -d temp_extract/dxvk-*/ | head -1)
           EXTRACTED_DIR_NAME=$(basename "$EXTRACTED_DIR")
-
-          # Zip the extracted folder
           cd temp_extract
           zip -r "../release_assets/dxvk-${{ env.short_sha }}.zip" "$EXTRACTED_DIR_NAME"
           cd ..
-
           ls -la release_assets/
 
       - name: Create Release
         if: steps.should-build.outputs.build == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "DXVK (${{ env.short_sha }})"
-          tag_name: "dxvk-${{ env.short_sha }}"
-          files: release_assets/*
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          
+          if [ -n "$PREV_TAG" ]; then
+            PREV_SHA=$(echo "$PREV_TAG" | sed 's/dxvk-//')
+            CURRENT_SHA="${{ env.short_sha }}"
+            CHANGELOG="**DXVK changes from [$PREV_SHA](https://github.com/doitsujin/dxvk/commits/$PREV_SHA) to [$CURRENT_SHA](https://github.com/doitsujin/dxvk/commits/$CURRENT_SHA):**\n\n"
+            CHANGELOG="${CHANGELOG}📄 [Full commit log](https://github.com/doitsujin/dxvk/compare/$PREV_SHA...$CURRENT_SHA)"
+          else
+            CHANGELOG="**First automated build of DXVK commit [${{ env.short_sha }}](https://github.com/doitsujin/dxvk/commit/${{ env.short_sha }})**\n\n📄 [View commit](https://github.com/doitsujin/dxvk/commit/${{ env.short_sha }})"
+          fi
+          
+          gh release create "dxvk-${{ env.short_sha }}" \
+            --title "DXVK (${{ env.short_sha }})" \
+            --notes "$CHANGELOG" \
+            release_assets/*
 
       - name: Update last built commit
         if: steps.should-build.outputs.build == 'true'
