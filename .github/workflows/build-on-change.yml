@@ -1,0 +1,105 @@
+name: "Auto build DXVK on change"
+
+on:
+  # Manual trigger (useful for testing)
+  workflow_dispatch:
+
+  # Scheduled check – minimum interval is 5 minutes, but we use 1 hour to be gentle.
+  # You can change to '*/5 * * * *' for every 5 minutes (GitHub's max frequency).
+  schedule:
+    - cron: '0 * * * *'   # every hour
+
+permissions:
+  contents: write          # needed to create releases
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout YOUR repository (to read/write the stored last commit hash)
+      - name: Checkout your repo
+        uses: actions/checkout@v4
+
+      # 2. Get the latest commit SHA from upstream DXVK
+      - name: Get latest DXVK commit
+        id: get-latest
+        run: |
+          LATEST_SHA=$(git ls-remote https://github.com/doitsujin/dxvk HEAD | cut -f1)
+          echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+          echo "Latest DXVK commit: $LATEST_SHA"
+
+      # 3. Read the previously built commit (if any)
+      - name: Read last built commit
+        id: last-built
+        run: |
+          if [ -f last_built_commit.txt ]; then
+            LAST_SHA=$(cat last_built_commit.txt)
+          else
+            LAST_SHA=""
+          fi
+          echo "last_sha=$LAST_SHA" >> $GITHUB_OUTPUT
+          echo "Last built commit: $LAST_SHA"
+
+      # 4. Decide whether to build
+      - name: Check if new commit
+        id: should-build
+        run: |
+          if [ "${{ steps.get-latest.outputs.latest_sha }}" != "${{ steps.last-built.outputs.last_sha }}" ]; then
+            echo "build=true" >> $GITHUB_OUTPUT
+            echo "✅ New commit detected. Building..."
+          else
+            echo "build=false" >> $GITHUB_OUTPUT
+            echo "⏭️ No new commit. Skipping build."
+          fi
+
+      # 5. Build DXVK (only if changed)
+      - name: Build DXVK
+        if: steps.should-build.outputs.build == 'true'
+        id: build
+        uses: Joshua-Ashton/arch-mingw-github-action@v8
+        with:
+          command: |
+            # Clone only the specific commit (no extra history)
+            git clone --depth 1 --recursive https://github.com/doitsujin/dxvk.git dxvk_source
+            cd dxvk_source
+            git fetch --depth 1 origin ${{ steps.get-latest.outputs.latest_sha }}
+            git checkout ${{ steps.get-latest.outputs.latest_sha }}
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            ./package-release.sh "$SHORT_SHA" build --no-package
+            echo "short_sha=$SHORT_SHA" >> $GITHUB_ENV
+
+      # 6. Prepare release assets (ZIP files)
+      - name: Package artifacts
+        if: steps.should-build.outputs.build == 'true'
+        run: |
+          mkdir -p release_assets
+          # The build output is in dxvk_source/build/dxvk-*
+          find dxvk_source/build -name "*.tar.gz" -o -name "*.zip" -exec cp {} release_assets/ \;
+          # Also create a single zip with everything for convenience
+          cd release_assets
+          zip -r "../dxvk-${{ env.short_sha }}.zip" .
+
+      # 7. Create GitHub Release
+      - name: Create Release
+        if: steps.should-build.outputs.build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "DXVK (${{ env.short_sha }})"
+          tag_name: "dxvk-${{ env.short_sha }}"
+          files: |
+            dxvk-${{ env.short_sha }}.zip
+            release_assets/*.tar.gz
+            release_assets/*.zip
+          generate_release_notes: true
+
+      # 8. Remember the new commit for next run
+      - name: Update last built commit
+        if: steps.should-build.outputs.build == 'true'
+        run: |
+          echo "${{ steps.get-latest.outputs.latest_sha }}" > last_built_commit.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_built_commit.txt
+          git commit -m "Update last built commit to ${{ steps.get-latest.outputs.latest_sha }}"
+          git push
