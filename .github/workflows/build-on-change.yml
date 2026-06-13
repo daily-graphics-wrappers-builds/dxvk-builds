@@ -1,9 +1,9 @@
 name: "Auto build DXVK on change"
 
 on:
-  workflow_dispatch:          # manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'       # every hour – change to '*/5 * * * *' for 5 minutes
+    - cron: '0 * * * *'       # every hour
 
 permissions:
   contents: write
@@ -13,11 +13,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout your repo (to store the last built commit hash)
       - name: Checkout your repo
         uses: actions/checkout@v4
 
-      # 2. Get latest DXVK commit SHA
       - name: Get latest DXVK commit
         id: get-latest
         run: |
@@ -25,7 +23,6 @@ jobs:
           echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
           echo "Latest DXVK commit: $LATEST_SHA"
 
-      # 3. Read last built commit
       - name: Read last built commit
         id: last-built
         run: |
@@ -36,7 +33,6 @@ jobs:
           fi
           echo "last_sha=$LAST_SHA" >> $GITHUB_OUTPUT
 
-      # 4. Decide whether to build
       - name: Check if new commit
         id: should-build
         run: |
@@ -46,38 +42,42 @@ jobs:
             echo "build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 5. Build DXVK (only if changed)
       - name: Build DXVK
         if: steps.should-build.outputs.build == 'true'
         id: build
         uses: Joshua-Ashton/arch-mingw-github-action@v8
         with:
           command: |
-            # Clone DXVK source at the specific commit
             git clone --depth 1 --recursive https://github.com/doitsujin/dxvk.git dxvk_source
             cd dxvk_source
             git fetch --depth 1 origin ${{ steps.get-latest.outputs.latest_sha }}
             git checkout ${{ steps.get-latest.outputs.latest_sha }}
             SHORT_SHA=$(git rev-parse --short HEAD)
-            # Build and package (creates both staging directory and .tar.gz)
             ./package-release.sh "$SHORT_SHA" build
             echo "short_sha=$SHORT_SHA" >> $GITHUB_ENV
 
-      # 6. Collect artifacts – copy .tar.gz and zip the staging directory
       - name: Collect artifacts
         if: steps.should-build.outputs.build == 'true'
         run: |
           mkdir -p release_assets
           # Copy the original .tar.gz
           cp dxvk_source/build/dxvk-*.tar.gz release_assets/
-          # Zip the staging directory (which contains x32/, x64/, etc.)
-          cd dxvk_source/build
-          STAGING_DIR=$(ls -d dxvk-*/ | head -1)
-          zip -r "../../release_assets/dxvk-${{ env.short_sha }}.zip" "$STAGING_DIR"
-          cd ../..
+
+          # Extract the tarball into a temporary directory (solves permission issues)
+          mkdir -p temp_extract
+          tar -xzf dxvk_source/build/dxvk-*.tar.gz -C temp_extract
+
+          # Find the extracted folder (should be named dxvk-<short_sha>)
+          EXTRACTED_DIR=$(ls -d temp_extract/dxvk-*/ | head -1)
+          EXTRACTED_DIR_NAME=$(basename "$EXTRACTED_DIR")
+
+          # Zip the extracted folder
+          cd temp_extract
+          zip -r "../release_assets/dxvk-${{ env.short_sha }}.zip" "$EXTRACTED_DIR_NAME"
+          cd ..
+
           ls -la release_assets/
 
-      # 7. Create GitHub Release with both .tar.gz and .zip
       - name: Create Release
         if: steps.should-build.outputs.build == 'true'
         uses: softprops/action-gh-release@v2
@@ -87,7 +87,6 @@ jobs:
           files: release_assets/*
           generate_release_notes: true
 
-      # 8. Remember this commit for next run
       - name: Update last built commit
         if: steps.should-build.outputs.build == 'true'
         run: |
