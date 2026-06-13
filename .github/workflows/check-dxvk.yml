@@ -1,0 +1,56 @@
+name: 'Monitor DXVK for Changes'
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # Runs every 2 hours
+  workflow_dispatch:          # Allows you to run it manually
+
+jobs:
+  check-for-updates:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      new_commit_sha: ${{ steps.get-commit.outputs.new_commit_sha }}
+    steps:
+      - name: Checkout your own repository
+        uses: actions/checkout@v4
+
+      - name: Get Latest DXVK Commit SHA
+        id: get-commit
+        run: |
+          LATEST_SHA=$(git ls-remote https://github.com/doitsujin/dxvk HEAD | cut -f1)
+          echo "new_commit_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+
+      - name: Check Against Last Recorded Commit
+        id: check
+        run: |
+          LAST_SHA=$(cat last_commit_sha.txt 2>/dev/null || echo "")
+          echo "Last recorded SHA: $LAST_SHA"
+          echo "Latest DXVK SHA: ${{ steps.get-commit.outputs.new_commit_sha }}"
+          
+          if [ "$LAST_SHA" != "${{ steps.get-commit.outputs.new_commit_sha }}" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Changes detected. Triggering build."
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "No new changes."
+          fi
+
+      - name: Update Last Commit Record
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          echo "${{ steps.get-commit.outputs.new_commit_sha }}" > last_commit_sha.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add last_commit_sha.txt
+          git commit -m "Update last commit SHA to ${{ steps.get-commit.outputs.new_commit_sha }}"
+          git push
+
+      - name: Trigger Build in Remote Repository
+        if: steps.check.outputs.should_build == 'true'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DISPATCH_TOKEN }}
+          repository: YOUR_USERNAME/YOUR_BUILDER_REPO
+          event-type: dxvk-update
+          client-payload: '{"commit_sha": "${{ steps.get-commit.outputs.new_commit_sha }}"}'
