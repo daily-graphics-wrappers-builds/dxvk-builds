@@ -3,7 +3,7 @@ name: "Auto build DXVK on change"
 on:
   workflow_dispatch:          # manual trigger
   schedule:
-    - cron: '0 * * * *'       # every hour – change to '*/5 * * * *' if you really need 5 min
+    - cron: '0 * * * *'       # every hour – change to '*/5 * * * *' for 5 minutes
 
 permissions:
   contents: write
@@ -59,26 +59,22 @@ jobs:
             git fetch --depth 1 origin ${{ steps.get-latest.outputs.latest_sha }}
             git checkout ${{ steps.get-latest.outputs.latest_sha }}
             SHORT_SHA=$(git rev-parse --short HEAD)
-            # Package without --no-package – this creates .tar.gz
+            # Build and package (creates both staging directory and .tar.gz)
             ./package-release.sh "$SHORT_SHA" build
             echo "short_sha=$SHORT_SHA" >> $GITHUB_ENV
-            echo "The .tar.gz file is at: build/dxvk-$SHORT_SHA.tar.gz"
 
-      # 6. Collect ALL generated files (both .tar.gz and optionally convert to .zip)
+      # 6. Collect artifacts – copy .tar.gz and zip the staging directory
       - name: Collect artifacts
         if: steps.should-build.outputs.build == 'true'
         run: |
           mkdir -p release_assets
-          # Copy the original DXVK .tar.gz
+          # Copy the original .tar.gz
           cp dxvk_source/build/dxvk-*.tar.gz release_assets/
-          # Also create a .zip from the unpacked contents (so users have a choice)
+          # Zip the staging directory (which contains x32/, x64/, etc.)
           cd dxvk_source/build
-          tar -xzf dxvk-*.tar.gz
-          # The extracted folder is named like dxvk-<sha>/
-          ZIP_FOLDER=$(ls -d dxvk-*/ | head -1)
-          zip -r "../../release_assets/dxvk-${{ env.short_sha }}.zip" "$ZIP_FOLDER"
+          STAGING_DIR=$(ls -d dxvk-*/ | head -1)
+          zip -r "../../release_assets/dxvk-${{ env.short_sha }}.zip" "$STAGING_DIR"
           cd ../..
-          # List what we have
           ls -la release_assets/
 
       # 7. Create GitHub Release with both .tar.gz and .zip
