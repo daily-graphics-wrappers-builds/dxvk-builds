@@ -3,7 +3,7 @@ name: "Auto build DXVK on change"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'       # every hour – change to '*/5 * * * *' for 5 minutes
+    - cron: '0 * * * *'       # every hour
 
 permissions:
   contents: write
@@ -60,9 +60,7 @@ jobs:
         if: steps.should-build.outputs.build == 'true'
         run: |
           mkdir -p release_assets
-          # Copy the original .tar.gz
           cp dxvk_source/build/dxvk-*.tar.gz release_assets/
-          # Extract tarball to a temporary directory and repack as .zip
           mkdir -p temp_extract
           tar -xzf dxvk_source/build/dxvk-*.tar.gz -C temp_extract
           EXTRACTED_DIR=$(ls -d temp_extract/dxvk-*/ | head -1)
@@ -82,10 +80,12 @@ jobs:
           if [ -n "$PREV_TAG" ]; then
             PREV_SHA=$(echo "$PREV_TAG" | sed 's/dxvk-//')
             CURRENT_SHA="${{ env.short_sha }}"
-            CHANGELOG="**DXVK changes from [$PREV_SHA](https://github.com/doitsujin/dxvk/commits/$PREV_SHA) to [$CURRENT_SHA](https://github.com/doitsujin/dxvk/commits/$CURRENT_SHA):**\n\n"
-            CHANGELOG="${CHANGELOG}📄 [Full commit log](https://github.com/doitsujin/dxvk/compare/$PREV_SHA...$CURRENT_SHA)"
+            CHANGELOG=$(printf "**DXVK changes from [%s](https://github.com/doitsujin/dxvk/commits/%s) to [%s](https://github.com/doitsujin/dxvk/commits/%s):**\n\n📄 [Full commit log](https://github.com/doitsujin/dxvk/compare/%s...%s)" \
+              "$PREV_SHA" "$PREV_SHA" "$CURRENT_SHA" "$CURRENT_SHA" "$PREV_SHA" "$CURRENT_SHA")
           else
-            CHANGELOG="**First automated build of DXVK commit [${{ env.short_sha }}](https://github.com/doitsujin/dxvk/commit/${{ env.short_sha }})**\n\n📄 [View commit](https://github.com/doitsujin/dxvk/commit/${{ env.short_sha }})"
+            CURRENT_SHA="${{ env.short_sha }}"
+            CHANGELOG=$(printf "**First automated build of DXVK commit [%s](https://github.com/doitsujin/dxvk/commit/%s)**\n\n📄 [View commit](https://github.com/doitsujin/dxvk/commit/%s)" \
+              "$CURRENT_SHA" "$CURRENT_SHA" "$CURRENT_SHA")
           fi
           
           gh release create "dxvk-${{ env.short_sha }}" \
